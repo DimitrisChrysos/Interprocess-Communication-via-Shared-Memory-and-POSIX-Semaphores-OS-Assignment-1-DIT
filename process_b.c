@@ -1,4 +1,3 @@
-#define TEXT_SZ 2048
 #define SH_MEM_BUFF_SZ 15
 
 #include <unistd.h>
@@ -72,7 +71,7 @@ void *send_thread(void *shared_st) {
 
         // Take user input
         printf("Enter some text: ");
-        fgets(shared_stuff->point_to_local_bufferB, BUFSIZ, stdin);
+        fgets(shared_stuff->point_to_local_bufferB, BUFSIZ/2, stdin);
 
         // We break the message from the user into smaller packages, each consisting 
         // of 14 chars from the original message and '\0'
@@ -219,7 +218,7 @@ int main()
     // Create/Open shared memory
 	void *shared_memory = (void *)0;
 	struct shared_use_st *shared_stuff;
-    char buffer[BUFSIZ];
+    char buffer[BUFSIZ/2];
 	int shmid;
 	srand((unsigned int)getpid());
 	shmid = shmget((key_t)999961, sizeof(struct shared_use_st), 0666 | IPC_CREAT);
