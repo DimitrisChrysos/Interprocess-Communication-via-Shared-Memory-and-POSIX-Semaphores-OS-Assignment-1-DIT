@@ -175,7 +175,7 @@ void *receive_thread(void *shared_st) {
 
             // If we are receiving the first packet of a message use strcpy to initialize 
             // the local buffer, else use strcat to add to the current string
-            if (shared_stuff->first_msg_packetA == 1) {
+            if (shared_stuff->first_msg_packetA) {
                 
                 // For statistics
                 struct timeval cur_time;
