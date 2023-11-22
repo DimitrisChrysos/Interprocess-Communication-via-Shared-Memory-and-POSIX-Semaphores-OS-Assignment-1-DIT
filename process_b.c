@@ -38,6 +38,8 @@ struct shared_use_st {
     int first_msg_packetA;
     int first_msg_packetB;
     struct statistics stats;
+    int procA_exited;
+    int procB_exited;
 };
 
 /* Prints the statistics of the Process */
@@ -79,6 +81,7 @@ void *send_thread(void *shared_st) {
         if (strncmp(shared_stuff->bufferB, "#BYE#", 5) == 0) {
 
             // If user input == "#BYE#" Process stops running
+            shared_stuff->procB_exited = 1;
             shared_stuff->sh_running = 0;
             sem_post(&shared_stuff->wait_B_receive);
             sem_post(&shared_stuff->wait_A_receive);
@@ -219,7 +222,7 @@ int main()
     char buffer[BUFSIZ];
 	int shmid;
 	srand((unsigned int)getpid());
-	shmid = shmget((key_t)999962, sizeof(struct shared_use_st), 0666 | IPC_CREAT);
+	shmid = shmget((key_t)999961, sizeof(struct shared_use_st), 0666 | IPC_CREAT);
 	if (shmid == -1) {
 		fprintf(stderr, "shmget failed\n");
 		exit(EXIT_FAILURE);
@@ -239,6 +242,7 @@ int main()
     shared_stuff->stats.count_msgs_B_send = 0;
     shared_stuff->stats.count_packets_B_send = 0;
     shared_stuff->stats.waiting_first_msg_counterB = 0;
+    shared_stuff->procB_exited = 0;
     sem_init(&shared_stuff->wait_B_receive, 1, 0);
     sem_init(&shared_stuff->constr_msg_B, 1, 0);
 
@@ -266,6 +270,13 @@ int main()
     if (res != 0) {
         perror("Thread join failed");
         exit(EXIT_FAILURE);
+    }
+
+    // We cancel the send thread if it is stack at fgets() after 
+    // all other threads have been joined
+    if (shared_stuff->sh_running == 0 && shared_stuff->procA_exited == 1) {
+        printf("procA exited\n");
+        pthread_cancel(a_thread);
     }
 
     // Join the send_thread
