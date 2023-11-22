@@ -8,6 +8,18 @@
 #include <sys/shm.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <sys/time.h>
+
+struct statistics {
+    int count_msgs_A_send;
+    int count_msgs_B_send;
+    int count_packets_A_send;
+    int count_packets_B_send;
+    struct timeval cur_timeA;
+    struct timeval cur_timeB;
+    long int waiting_first_msg_counterA;
+    long int waiting_first_msg_counterB;
+};
 
 struct shared_use_st {
     char bufferA[SH_MEM_BUFF_SZ];
@@ -23,7 +35,24 @@ struct shared_use_st {
     sem_t constr_msg_B;
     int first_msg_packetA;
     int first_msg_packetB;
+    struct statistics stats;
 };
+
+void print_on_exit(struct statistics stats) {
+    printf("\nStatistics for Process B:\n");
+    printf("ProcB send %d messages\n", stats.count_msgs_B_send);
+    printf("ProcB received %d messages\n", stats.count_msgs_A_send);
+    printf("ProcB send %d packages\n", stats.count_packets_B_send);
+    printf("ProcB received %d packages\n", stats.count_packets_A_send);
+    long int a = stats.count_packets_B_send;
+    long int b = stats.count_msgs_B_send;
+    float average = (float)a / (float)b;
+    printf("ProcB send %f packages per message\n", average);
+    a = stats.waiting_first_msg_counterB;
+    b = stats.count_msgs_B_send;
+    average = (float)a / (float)b;
+    printf("Average waiting time to receive the first package of a new message: %f microseconds\n\n", average);
+}
 
 void *send_thread(void *shared_st) {
     struct shared_use_st *shared_stuff = shared_st;
@@ -46,14 +75,27 @@ void *send_thread(void *shared_st) {
 
                 //  End of sending message
                 shared_stuff->constracting_msg_A = 0;
+                shared_stuff->stats.count_packets_B_send++;
+
+
+                if (shared_stuff->first_msg_packetA) {
+                    gettimeofday(&shared_stuff->stats.cur_timeB, NULL);
+                }
+
+
                 sem_post(&shared_stuff->wait_A_receive);
                 sem_wait(&shared_stuff->constr_msg_A);
                 counter = 0;
                 break;
             }
 
+            if (shared_stuff->first_msg_packetA) {
+                gettimeofday(&shared_stuff->stats.cur_timeB, NULL);
+            }
+
             //  Start sending message
             shared_stuff->constracting_msg_A = 1;
+            shared_stuff->stats.count_packets_B_send++;
             sem_post(&shared_stuff->wait_A_receive);
             sem_wait(&shared_stuff->constr_msg_A);
 
@@ -72,6 +114,13 @@ void *receive_thread(void *shared_st) {
             break;
         if (shared_stuff->constracting_msg_B == 1) {
             if (shared_stuff->first_msg_packetB == 1) {
+                
+                
+                struct timeval cur_time1;
+                gettimeofday(&cur_time1, NULL);
+                shared_stuff->stats.waiting_first_msg_counterB += cur_time1.tv_usec- shared_stuff->stats.cur_timeA.tv_usec;
+                
+
                 strncpy(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA, SH_MEM_BUFF_SZ-1);
                 shared_stuff->point_to_local_bufferB[14] = '\0';
                 shared_stuff->first_msg_packetB = 0;
@@ -83,6 +132,13 @@ void *receive_thread(void *shared_st) {
         }
         else {
             if (shared_stuff->first_msg_packetB == 1) {
+                
+                
+                struct timeval cur_time;
+                gettimeofday(&cur_time, NULL);
+                shared_stuff->stats.waiting_first_msg_counterB += cur_time.tv_usec- shared_stuff->stats.cur_timeA.tv_usec;
+
+                
                 strncpy(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA, SH_MEM_BUFF_SZ-1);
                 shared_stuff->point_to_local_bufferB[14] = '\0';
                 shared_stuff->first_msg_packetB = 0;
@@ -90,6 +146,7 @@ void *receive_thread(void *shared_st) {
             else {
                 strcat(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA);
             }
+            shared_stuff->stats.count_msgs_A_send++;
             printf("\nYour friend wrote: %s", shared_stuff->point_to_local_bufferB);
             shared_stuff->first_msg_packetB = 1;
             sem_post(&shared_stuff->constr_msg_B);
@@ -108,7 +165,7 @@ int main()
     char buffer[BUFSIZ];
 	int shmid;
 	srand((unsigned int)getpid());
-	shmid = shmget((key_t)999967, sizeof(struct shared_use_st), 0666 | IPC_CREAT);
+	shmid = shmget((key_t)999962, sizeof(struct shared_use_st), 0666 | IPC_CREAT);
 	if (shmid == -1) {
 		fprintf(stderr, "shmget failed\n");
 		exit(EXIT_FAILURE);
@@ -125,6 +182,9 @@ int main()
     shared_stuff->sh_running = 1;
     shared_stuff->constracting_msg_B = 0;
     shared_stuff->first_msg_packetB = 1;
+    shared_stuff->stats.count_msgs_B_send = 0;
+    shared_stuff->stats.count_packets_B_send = 0;
+    shared_stuff->stats.waiting_first_msg_counterB = 0;
     sem_init(&shared_stuff->wait_B_receive, 1, 0);
     sem_init(&shared_stuff->constr_msg_B, 1, 0);
 
@@ -161,7 +221,7 @@ int main()
         exit(EXIT_FAILURE);
     }
 
-
+    print_on_exit(shared_stuff->stats);
 
 	if (shmdt(shared_memory) == -1) {
 		fprintf(stderr, "shmdt failed\n");
