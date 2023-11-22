@@ -1,4 +1,5 @@
 #define TEXT_SZ 2048
+#define SH_MEM_BUFF_SZ 15
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -9,13 +10,19 @@
 #include <semaphore.h>
 
 struct shared_use_st {
-    char bufferA[TEXT_SZ];
-    char bufferB[TEXT_SZ];
+    char bufferA[SH_MEM_BUFF_SZ];
+    char bufferB[SH_MEM_BUFF_SZ];
     char* point_to_local_bufferA;
     char* point_to_local_bufferB;
     int sh_running;
     sem_t wait_A_receive;
     sem_t wait_B_receive;
+    int constracting_msg_A;
+    int constracting_msg_B;
+    sem_t constr_msg_A;
+    sem_t constr_msg_B;
+    int first_msg_packetA;
+    int first_msg_packetB;
 };
 
 void *send_thread(void *shared_st) {
@@ -25,12 +32,34 @@ void *send_thread(void *shared_st) {
             break;
         printf("Enter some text: ");
         fgets(shared_stuff->point_to_local_bufferB, BUFSIZ, stdin);
-        strncpy(shared_stuff->bufferB, shared_stuff->point_to_local_bufferB, TEXT_SZ);
+
+        int counter=0;
+        strncpy(shared_stuff->bufferB, shared_stuff->point_to_local_bufferB + counter, SH_MEM_BUFF_SZ-1);
         if (strncmp(shared_stuff->bufferB, "end", 3) == 0) {
             shared_stuff->sh_running = 0;
             sem_post(&shared_stuff->wait_B_receive);
+            sem_post(&shared_stuff->wait_A_receive);
+            break;
         }
-        sem_post(&shared_stuff->wait_A_receive);
+        while (1) {
+            if (shared_stuff->bufferB[13] == '\0') {
+
+                //  End of sending message
+                shared_stuff->constracting_msg_A = 0;
+                sem_post(&shared_stuff->wait_A_receive);
+                sem_wait(&shared_stuff->constr_msg_A);
+                counter = 0;
+                break;
+            }
+
+            //  Start sending message
+            shared_stuff->constracting_msg_A = 1;
+            sem_post(&shared_stuff->wait_A_receive);
+            sem_wait(&shared_stuff->constr_msg_A);
+
+            counter += SH_MEM_BUFF_SZ-1;
+            strncpy(shared_stuff->bufferB, shared_stuff->point_to_local_bufferB + counter, SH_MEM_BUFF_SZ-1);
+        }
     }
     pthread_exit("Thank you for the chat!");
 }
@@ -41,9 +70,32 @@ void *receive_thread(void *shared_st) {
         sem_wait(&shared_stuff->wait_B_receive);
         if (shared_stuff->sh_running == 0)
             break;
-        printf("\nYour friend wrote: %s", shared_stuff->bufferA);
-        if (strncmp(shared_stuff->bufferA, "end", 3) == 0) {
-            shared_stuff->sh_running = 0;
+        if (shared_stuff->constracting_msg_B == 1) {
+            if (shared_stuff->first_msg_packetB == 1) {
+                strncpy(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA, SH_MEM_BUFF_SZ-1);
+                shared_stuff->point_to_local_bufferB[14] = '\0';
+                shared_stuff->first_msg_packetB = 0;
+            }
+            else {
+                strcat(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA);
+            }
+            sem_post(&shared_stuff->constr_msg_B);
+        }
+        else {
+            if (shared_stuff->first_msg_packetB == 1) {
+                strncpy(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA, SH_MEM_BUFF_SZ-1);
+                shared_stuff->point_to_local_bufferB[14] = '\0';
+                shared_stuff->first_msg_packetB = 0;
+            }
+            else {
+                strcat(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA);
+            }
+            printf("\nYour friend wrote: %s", shared_stuff->point_to_local_bufferB);
+            shared_stuff->first_msg_packetB = 1;
+            sem_post(&shared_stuff->constr_msg_B);
+            if (strncmp(shared_stuff->bufferA, "end", 3) == 0) {
+                shared_stuff->sh_running = 0;
+            }
         }
     }
     pthread_exit("Thank you for the chat!");
@@ -56,7 +108,7 @@ int main()
     char buffer[BUFSIZ];
 	int shmid;
 	srand((unsigned int)getpid());
-	shmid = shmget((key_t)999978, sizeof(struct shared_use_st), 0666 | IPC_CREAT);
+	shmid = shmget((key_t)999967, sizeof(struct shared_use_st), 0666 | IPC_CREAT);
 	if (shmid == -1) {
 		fprintf(stderr, "shmget failed\n");
 		exit(EXIT_FAILURE);
@@ -71,7 +123,10 @@ int main()
 	shared_stuff = (struct shared_use_st *)shared_memory;
     shared_stuff->point_to_local_bufferB = buffer;
     shared_stuff->sh_running = 1;
+    shared_stuff->constracting_msg_B = 0;
+    shared_stuff->first_msg_packetB = 1;
     sem_init(&shared_stuff->wait_B_receive, 1, 0);
+    sem_init(&shared_stuff->constr_msg_B, 1, 0);
 
     
     /* Create and Join the two Threads */
