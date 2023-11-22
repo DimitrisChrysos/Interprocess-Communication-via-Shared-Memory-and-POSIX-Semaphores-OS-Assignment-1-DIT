@@ -10,6 +10,7 @@
 #include <semaphore.h>
 #include <sys/time.h>
 
+/* Struct used to print statistics of the process at the end */
 struct statistics {
     int count_msgs_A_send;
     int count_msgs_B_send;
@@ -21,6 +22,7 @@ struct statistics {
     long int waiting_first_msg_counterB;
 };
 
+/* Struct used for Shared Memory*/
 struct shared_use_st {
     char bufferA[SH_MEM_BUFF_SZ];
     char bufferB[SH_MEM_BUFF_SZ];
@@ -38,6 +40,7 @@ struct shared_use_st {
     struct statistics stats;
 };
 
+/* Prints the statistics of the Process */
 void print_on_exit(struct statistics stats) {
     printf("\nStatistics for Process B:\n");
     printf("ProcB send %d messages\n", stats.count_msgs_B_send);
@@ -54,51 +57,68 @@ void print_on_exit(struct statistics stats) {
     printf("Average waiting time to receive the first package of a new message: %f microseconds\n\n", average);
 }
 
+/* Thread used to send a message to the other Process */
 void *send_thread(void *shared_st) {
     struct shared_use_st *shared_stuff = shared_st;
+
+    // Creates a loop to send as many messages as needed
     while (shared_stuff->sh_running) {
+
+        // If program stops running break and exit thread
         if (shared_stuff->sh_running == 0)
             break;
+
+        // Take user input
         printf("Enter some text: ");
         fgets(shared_stuff->point_to_local_bufferB, BUFSIZ, stdin);
 
+        // We break the message from the user into smaller packages, each consisting 
+        // of 14 chars from the original message and '\0'
         int counter=0;
         strncpy(shared_stuff->bufferB, shared_stuff->point_to_local_bufferB + counter, SH_MEM_BUFF_SZ-1);
-        if (strncmp(shared_stuff->bufferB, "end", 3) == 0) {
+        if (strncmp(shared_stuff->bufferB, "#BYE#", 5) == 0) {
+
+            // If user input == "#BYE#" Process stops running
             shared_stuff->sh_running = 0;
             sem_post(&shared_stuff->wait_B_receive);
             sem_post(&shared_stuff->wait_A_receive);
             break;
         }
         while (1) {
+            
+            // If we have a message smaller than 14 chars or we are sending the 
+            // last package of a message
             if (shared_stuff->bufferB[13] == '\0') {
 
-                //  End of sending message
+                // Notify that we are no logner constracting a message for B
                 shared_stuff->constracting_msg_A = 0;
+
+                // For Statistics
                 shared_stuff->stats.count_packets_B_send++;
-
-
                 if (shared_stuff->first_msg_packetA) {
                     gettimeofday(&shared_stuff->stats.cur_timeB, NULL);
                 }
 
-
+                // Break the loop and continue to the original loop
                 sem_post(&shared_stuff->wait_A_receive);
                 sem_wait(&shared_stuff->constr_msg_A);
                 counter = 0;
                 break;
             }
 
+            // If we have a message larger than 14 chars
+            // For Statistics
             if (shared_stuff->first_msg_packetA) {
                 gettimeofday(&shared_stuff->stats.cur_timeB, NULL);
             }
 
-            //  Start sending message
+            // Send each Packet
             shared_stuff->constracting_msg_A = 1;
             shared_stuff->stats.count_packets_B_send++;
             sem_post(&shared_stuff->wait_A_receive);
             sem_wait(&shared_stuff->constr_msg_A);
 
+            // For the next packet
             counter += SH_MEM_BUFF_SZ-1;
             strncpy(shared_stuff->bufferB, shared_stuff->point_to_local_bufferB + counter, SH_MEM_BUFF_SZ-1);
         }
@@ -106,51 +126,84 @@ void *send_thread(void *shared_st) {
     pthread_exit("Thank you for the chat!");
 }
 
+/* Thread used to receive a message from the other Process */
 void *receive_thread(void *shared_st) {
     struct shared_use_st *shared_stuff = shared_st;
+
+    // Creates a loop to receive as many messages as needed
     while (shared_stuff->sh_running) {
+
+        // Wait for the other Process to send a message, or if the same Process
+        // terminates the program with "#BYE#" 
         sem_wait(&shared_stuff->wait_B_receive);
+        
+        // If program stops running break and exit thread 
         if (shared_stuff->sh_running == 0)
             break;
+
+        // If we are currently constracting a message that is send by the other Process
+        // Else print the message
         if (shared_stuff->constracting_msg_B == 1) {
+            
+            // If we are receiving the first packet of a message use strcpy to initialize 
+            // the local buffer, else use strcat to add to the current string
             if (shared_stuff->first_msg_packetB == 1) {
                 
-                
+                // For Statistics
                 struct timeval cur_time1;
                 gettimeofday(&cur_time1, NULL);
                 shared_stuff->stats.waiting_first_msg_counterB += cur_time1.tv_usec- shared_stuff->stats.cur_timeA.tv_usec;
                 
-
+                // Add the first packet
                 strncpy(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA, SH_MEM_BUFF_SZ-1);
                 shared_stuff->point_to_local_bufferB[14] = '\0';
                 shared_stuff->first_msg_packetB = 0;
             }
             else {
+                // Add the next packet
                 strcat(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA);
             }
+
+            // Continue constracting the message from the other Process
             sem_post(&shared_stuff->constr_msg_B);
         }
         else {
+
+            // If we are not constracting a message anymore, or the message was under 14 chars,
+            // we print the message
+
+            // If we are receiving the first packet of a message use strcpy to initialize 
+            // the local buffer, else use strcat to add to the current string
             if (shared_stuff->first_msg_packetB == 1) {
                 
-                
+                // For statistics
                 struct timeval cur_time;
                 gettimeofday(&cur_time, NULL);
                 shared_stuff->stats.waiting_first_msg_counterB += cur_time.tv_usec- shared_stuff->stats.cur_timeA.tv_usec;
 
-                
+                // Add the first packet
                 strncpy(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA, SH_MEM_BUFF_SZ-1);
                 shared_stuff->point_to_local_bufferB[14] = '\0';
                 shared_stuff->first_msg_packetB = 0;
             }
             else {
+                // Add the next packet
                 strcat(shared_stuff->point_to_local_bufferB, shared_stuff->bufferA);
             }
+
+            // For Statistics
             shared_stuff->stats.count_msgs_A_send++;
+            
+            // Print the message that was received and initialize again the thread 
+            // to receive a new message
             printf("\nYour friend wrote: %s", shared_stuff->point_to_local_bufferB);
             shared_stuff->first_msg_packetB = 1;
+            
+            // Make send thread from the other process able to get a new user input
             sem_post(&shared_stuff->constr_msg_B);
-            if (strncmp(shared_stuff->bufferA, "end", 3) == 0) {
+            
+            // If user input was "#BYE#", exit the thread
+            if (strncmp(shared_stuff->bufferA, "#BYE#", 5) == 0) {
                 shared_stuff->sh_running = 0;
             }
         }
@@ -160,6 +213,7 @@ void *receive_thread(void *shared_st) {
 
 int main()
 {
+    // Create/Open shared memory
 	void *shared_memory = (void *)0;
 	struct shared_use_st *shared_stuff;
     char buffer[BUFSIZ];
@@ -175,8 +229,8 @@ int main()
 		fprintf(stderr, "shmat failed\n");
 		exit(EXIT_FAILURE);
 	}
-	printf("Shared memory segment with id %d attached at %p\n", shmid, shared_memory);
 
+    // Initialize values of items in Shared Memory
 	shared_stuff = (struct shared_use_st *)shared_memory;
     shared_stuff->point_to_local_bufferB = buffer;
     shared_stuff->sh_running = 1;
@@ -221,12 +275,17 @@ int main()
         exit(EXIT_FAILURE);
     }
 
+    // After the two threads have returned, we print some
+    // statistics on the exit
     print_on_exit(shared_stuff->stats);
 
+    // Detach Shared Memory
 	if (shmdt(shared_memory) == -1) {
 		fprintf(stderr, "shmdt failed\n");
 		exit(EXIT_FAILURE);
 	}
+
+    // Mark the Shared Memory segment to be destroyed
 	if (shmctl(shmid, IPC_RMID, 0) == -1) {
 		fprintf(stderr, "shmctl(IPC_RMID) failed\n");
 		exit(EXIT_FAILURE);
