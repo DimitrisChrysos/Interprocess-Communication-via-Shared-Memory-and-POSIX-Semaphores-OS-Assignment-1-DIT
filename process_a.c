@@ -54,7 +54,7 @@ void print_on_exit(struct statistics stats) {
     float average = (float)a / (float)b;
     printf("ProcA send %f packages per message\n", average);
     a = stats.waiting_first_msg_counterA;
-    b = stats.count_msgs_A_send;
+    b = stats.count_msgs_B_send;
     average = (float)a / (float)b;
     printf("Average waiting time to receive the first package of a new message: %f microseconds\n\n", average);
 }
